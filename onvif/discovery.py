@@ -37,7 +37,15 @@ PROBE_MATCH = """<?xml version="1.0" encoding="utf-8"?>
 def run(dev_uuid: str, scopes: list[str], host_ip: str = "192.168.1.138", onvif_port: int = 8089):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", PORT))
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except AttributeError:
+        pass
+    try:
+        sock.bind(("0.0.0.0", PORT))
+    except OSError:
+        log.warning(f"发现端口 {PORT} 被占用，WS-Discovery 不可用")
+        return
     mreq = struct.pack("4s4s", socket.inet_aton(MCAST), socket.inet_aton("0.0.0.0"))
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
     sock.settimeout(5)

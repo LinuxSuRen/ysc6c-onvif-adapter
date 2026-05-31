@@ -238,7 +238,7 @@ def start_onvif_server(host: str = "0.0.0.0", port: int = 8089) -> int:
             if offset == 19:
                 log.error(f"ONVIF 端口 {port}-{port + 19} 全部被占用")
                 raise
-            log.warning(f"端口 {try_port} 被占用，尝试 {try_port + 1}...")
+            log.debug(f"端口 {try_port} 被占用，尝试 {try_port + 1}")
     return port
 
 
