@@ -224,14 +224,22 @@ class ONVIFHandler(BaseHTTPRequestHandler):
         return soap_response("<tptz:StopResponse/>")
 
 
-def start_onvif_server(host: str = "0.0.0.0", port: int = 8089):
-    try:
-        server = HTTPServer((host, port), ONVIFHandler)
-        log.info(f"ONVIF http://{HOST_IP}:{port}/onvif/device_service")
-        server.serve_forever()
-    except OSError as e:
-        log.error(f"ONVIF 端口 {port} 被占用: {e}")
-        raise
+def start_onvif_server(host: str = "0.0.0.0", port: int = 8089) -> int:
+    for offset in range(20):
+        try_port = port + offset
+        try:
+            server = HTTPServer((host, try_port), ONVIFHandler)
+            global ONVIF_PORT
+            ONVIF_PORT = try_port
+            log.info(f"ONVIF http://{HOST_IP}:{try_port}/onvif/device_service")
+            server.serve_forever()
+            return try_port
+        except OSError:
+            if offset == 19:
+                log.error(f"ONVIF 端口 {port}-{port + 19} 全部被占用")
+                raise
+            log.warning(f"端口 {try_port} 被占用，尝试 {try_port + 1}...")
+    return port
 
 
 def start_mjpeg_relay_inline(source_url: str, mjpeg_port: int = 8555) -> subprocess.Popen | None:

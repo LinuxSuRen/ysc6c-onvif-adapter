@@ -24,6 +24,19 @@ def detect_host_ip() -> str:
         s.close()
 
 
+def _pick_port(base: int) -> int:
+    from http.server import HTTPServer
+    for offset in range(20):
+        p = base + offset
+        try:
+            s = HTTPServer(("0.0.0.0", p), onvif.ONVIFHandler)
+            s.server_close()
+            return p
+        except OSError:
+            continue
+    raise OSError(f"端口 {base}-{base + 19} 全部被占用")
+
+
 class CameraConsole(cmd.Cmd):
     intro = """
   ╔══════════════════════════════════════════╗
@@ -135,12 +148,21 @@ class CameraConsole(cmd.Cmd):
         print(f"🟢 ONVIF 已启动: http://{onvif.HOST_IP}:{onvif.ONVIF_PORT}/onvif/device_service")
 
     def _start_onvif_server(self):
+        try:
+            port = _pick_port(onvif.ONVIF_PORT)
+        except OSError as e:
+            print(f"❌ {e}")
+            return
+        if port != onvif.ONVIF_PORT:
+            print(f"⚠️  端口 {onvif.ONVIF_PORT} 被占用，使用 {port}")
+            onvif.ONVIF_PORT = port
+
         threading.Thread(target=lambda: discovery_run(
-            onvif.UUID_URN, onvif.SCOPES, onvif.HOST_IP, onvif.ONVIF_PORT,
+            onvif.UUID_URN, onvif.SCOPES, onvif.HOST_IP, port,
         ), daemon=True).start()
         onvif.start_mjpeg_relay_inline(onvif.STREAM_URL, onvif.MJPEG_PORT)
         try:
-            onvif.start_onvif_server("0.0.0.0", onvif.ONVIF_PORT)
+            onvif.start_onvif_server("0.0.0.0", port)
         except OSError as e:
             print(f"❌ ONVIF 启动失败: {e}")
 
@@ -165,8 +187,17 @@ def run_headless(auth: YS7Auth, cam: CameraInfo, config: dict):
         else:
             print("⚠️  未设置 RTSP 密码且云端流获取失败，视频不可用")
 
+    try:
+        actual_port = _pick_port(config["onvif_port"])
+    except OSError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+
+    if actual_port != config["onvif_port"]:
+        print(f"⚠️  端口 {config['onvif_port']} 被占用，使用 {actual_port}")
+
     onvif.HOST_IP = config["host_ip"]
-    onvif.ONVIF_PORT = config["onvif_port"]
+    onvif.ONVIF_PORT = actual_port
     onvif.MJPEG_PORT = config["mjpeg_port"]
     onvif.STREAM_URL = stream_url
     onvif.PTZ_CONTROLLER = ptz
@@ -177,21 +208,21 @@ def run_headless(auth: YS7Auth, cam: CameraInfo, config: dict):
 
     threading.Thread(
         target=lambda: discovery_run(
-            onvif.UUID_URN, onvif.SCOPES, config["host_ip"], config["onvif_port"],
+            onvif.UUID_URN, onvif.SCOPES, config["host_ip"], actual_port,
         ),
         daemon=True,
     ).start()
 
     print(f"🟢 ONVIF 服务已启动 ({cam.name})")
     print(f"   MJPEG: http://{config['host_ip']}:{config['mjpeg_port']}/stream")
-    print(f"   ONVIF: http://{config['host_ip']}:{config['onvif_port']}/onvif/device_service")
+    print(f"   ONVIF: http://{config['host_ip']}:{actual_port}/onvif/device_service")
 
     try:
-        onvif.start_onvif_server("0.0.0.0", config["onvif_port"])
+        onvif.start_onvif_server("0.0.0.0", actual_port)
     except KeyboardInterrupt:
         print("\n🛑 正在停止...")
     except OSError as e:
-        print(f"❌ 端口 {config['onvif_port']} 被占用: {e}")
+        print(f"❌ ONVIF 启动失败: {e}")
         sys.exit(1)
     finally:
         stop_mjpeg_relay(mjpeg_proc)
