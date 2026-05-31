@@ -1,0 +1,14 @@
+services:
+  ysc6c-camera:
+    build: .
+    network_mode: host
+    environment:
+      - YS7_APP_KEY=${YS7_APP_KEY}
+      - YS7_APP_SECRET=${YS7_APP_SECRET}
+      - CAMERA_IP=${CAMERA_IP:-192.168.1.100}
+      - RTSP_USER=${RTSP_USER:-admin}
+      - RTSP_PASS=${RTSP_PASS}
+      - HOST_IP=${HOST_IP:-192.168.1.138}
+      - ONVIF_PORT=${ONVIF_PORT:-8089}
+      - MJPEG_PORT=${MJPEG_PORT:-8555}
+    restart: unless-stopped
