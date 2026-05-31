@@ -216,6 +216,7 @@ def run_headless(auth: YS7Auth, cam: CameraInfo, config: dict):
     print(f"🟢 ONVIF 服务已启动 ({cam.name})")
     print(f"   MJPEG: http://{config['host_ip']}:{config['mjpeg_port']}/stream")
     print(f"   ONVIF: http://{config['host_ip']}:{actual_port}/onvif/device_service")
+    print(f"   如果自动发现不工作，请在 ONVIF 客户端中手动添加上述地址")
 
     try:
         onvif.start_onvif_server("0.0.0.0", actual_port)
