@@ -59,7 +59,7 @@ def _first_source(data) -> dict | None:
 
 
 def get_cloud_flv_url(auth: YS7Auth, cam: CameraInfo, quality: int = 1) -> str | None:
-    url = get_live_address(auth, cam, protocol=4, quality=quality, expire_seconds=3600)
+    url = get_live_address(auth, cam, protocol=4, quality=quality, expire_seconds=604800)
     if url:
         return url
     live = get_cloud_live_url(auth, cam)
@@ -71,7 +71,7 @@ def get_cloud_flv_url(auth: YS7Auth, cam: CameraInfo, quality: int = 1) -> str |
 
 
 def get_cloud_hls_url(auth: YS7Auth, cam: CameraInfo, quality: int = 1) -> str | None:
-    url = get_live_address(auth, cam, protocol=2, quality=quality, expire_seconds=3600)
+    url = get_live_address(auth, cam, protocol=2, quality=quality, expire_seconds=604800)
     if url:
         return url
     live = get_cloud_live_url(auth, cam)

@@ -59,7 +59,7 @@ class ONVIFHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8", errors="ignore")
         action = self.headers.get("SOAPAction", "").strip('"')
         op = action.split("/")[-1] if action else ""
-        log.debug(op)
+        print(f"[ONVIF] {op}")
         resp = self._handle(op, body)
         self.send_response(200)
         self.send_header("Content-Type", "application/soap+xml; charset=utf-8")
@@ -194,19 +194,23 @@ class ONVIFHandler(BaseHTTPRequestHandler):
 
     def _continuous_move(self, body: str) -> bytes:
         if PTZ_CONTROLLER is None:
+            print("[ONVIF PTZ] PTZ_CONTROLLER=None")
             return soap_response("<tptz:ContinuousMoveResponse/>")
         try:
             root = ET.fromstring(body)
-            ns = {"tt": "http://www.onvif.org/ver10/schema"}
-            vel = root.find(".//tt:Velocity", ns)
+            ns = {
+                "tt": "http://www.onvif.org/ver10/schema",
+                "tptz": "http://www.onvif.org/ver20/ptz/wsdl",
+            }
+            vel = root.find(".//tptz:Velocity", ns)
             if vel is not None:
                 pt_elem = vel.find("tt:PanTilt", ns)
                 zoom_elem = vel.find("tt:Zoom", ns)
                 pan = float(pt_elem.get("x", "0")) if pt_elem is not None else 0
                 tilt = float(pt_elem.get("y", "0")) if pt_elem is not None else 0
                 zoom = float(zoom_elem.get("x", "0")) if zoom_elem is not None else 0
+                print(f"[ONVIF PTZ] pan={pan}, tilt={tilt}, zoom={zoom}")
 
-                # ONVIF [-1,1] → ISAPI [-100,100] → duration ~800ms
                 isapi_pan = int(pan * 100)
                 isapi_tilt = int(tilt * 100)
                 isapi_zoom = int(zoom * 100)
@@ -217,17 +221,22 @@ class ONVIFHandler(BaseHTTPRequestHandler):
                         daemon=True,
                     ).start()
                 elif abs(isapi_pan) > 10 or abs(isapi_tilt) > 10:
-                    # 仅支持单一方向（ISAPI Momentary 不支持同时 pan+tilt）
                     if abs(isapi_pan) > abs(isapi_tilt):
                         direction = "right" if isapi_pan > 0 else "left"
                     else:
                         direction = "up" if isapi_tilt > 0 else "down"
+                    print(f"[ONVIF PTZ] calling move({direction})...")
                     threading.Thread(
                         target=lambda: PTZ_CONTROLLER.move(direction, 800),
                         daemon=True,
                     ).start()
+                else:
+                    print(f"[ONVIF PTZ] velocity too low: pan={isapi_pan}, tilt={isapi_tilt}")
+            else:
+                print("[ONVIF PTZ] no Velocity element found")
         except Exception as e:
-            log.error(f"PTZ err: {e}")
+            print(f"[ONVIF PTZ] error: {e}")
+            import traceback; traceback.print_exc()
         return soap_response("<tptz:ContinuousMoveResponse/>")
 
     def _ptz_stop(self) -> bytes:
