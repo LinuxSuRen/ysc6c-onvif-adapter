@@ -31,6 +31,9 @@ PTZ_NODE_TOKEN = "ptz"
 PTZ_CONFIG_TOKEN = "ptzcfg"
 
 STREAM_URL: str | None = None
+SNAPSHOT_URL: str | None = None
+_snapshot_cache = b""
+_snapshot_lock = threading.Lock()
 PTZ_CONTROLLER = None
 
 
@@ -65,6 +68,15 @@ class ONVIFHandler(BaseHTTPRequestHandler):
         self.wfile.write(resp)
 
     def do_GET(self):
+        if self.path == "/snapshot.jpg" and _snapshot_cache:
+            with _snapshot_lock:
+                data = _snapshot_cache
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", len(data))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/xml")
         self.end_headers()
@@ -251,7 +263,30 @@ def start_mjpeg_relay_inline(source_url: str, mjpeg_port: int = 8555) -> subproc
     try:
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log.info(f"MJPEG http://{HOST_IP}:{mjpeg_port}/stream")
+        threading.Thread(target=_snapshot_refresh_loop, daemon=True).start()
         return proc
     except FileNotFoundError:
         log.error("ffmpeg not found")
         return None
+
+
+def _snapshot_refresh_loop():
+    global _snapshot_cache
+    log.info("Snapshot cache refresh started")
+    while True:
+        source = STREAM_URL
+        if not source:
+            time.sleep(5)
+            continue
+        try:
+            args = ["ffmpeg", "-y"]
+            if source.startswith("rtsp://"):
+                args += ["-rtsp_transport", "tcp"]
+            args += ["-i", source, "-vframes", "1", "-f", "image2", "pipe:1"]
+            result = subprocess.run(args, capture_output=True, timeout=15)
+            if result.returncode == 0 and len(result.stdout) > 1000:
+                with _snapshot_lock:
+                    _snapshot_cache = result.stdout
+        except Exception:
+            pass
+        time.sleep(5)

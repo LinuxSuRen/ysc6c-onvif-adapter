@@ -142,6 +142,7 @@ class CameraConsole(cmd.Cmd):
     def do_onvif(self, _):
         rtsp = get_rtsp_url(self.rtsp_ip, self.rtsp_user, self.rtsp_pass)
         onvif.STREAM_URL = rtsp
+        onvif.SNAPSHOT_URL = rtsp
         onvif.PTZ_CONTROLLER = self.ptz
 
         threading.Thread(target=self._start_onvif_server, daemon=True).start()
@@ -200,6 +201,7 @@ def run_headless(auth: YS7Auth, cam: CameraInfo, config: dict):
     onvif.ONVIF_PORT = actual_port
     onvif.MJPEG_PORT = config["mjpeg_port"]
     onvif.STREAM_URL = stream_url
+    onvif.SNAPSHOT_URL = stream_url
     onvif.PTZ_CONTROLLER = ptz
     onvif.DEVICE_UUID = str(onvif.uuid.uuid4())
     onvif.UUID_URN = f"urn:uuid:{onvif.DEVICE_UUID}"
