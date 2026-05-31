@@ -274,6 +274,7 @@ def _snapshot_refresh_loop():
     global _snapshot_cache
     log.info("Snapshot cache refresh started")
     last_capture = 0
+    fail_count = 0
     while True:
         source = STREAM_URL
         if source:
@@ -286,10 +287,15 @@ def _snapshot_refresh_loop():
                 if result.returncode == 0 and len(result.stdout) > 1000:
                     with _snapshot_lock:
                         _snapshot_cache = result.stdout
+                    fail_count = 0
                     time.sleep(5)
                     continue
-            except Exception:
-                pass
+                fail_count += 1
+                stderr = result.stderr.decode(errors="ignore")[-200:] if result.stderr else "no output"
+                log.warning(f"Snapshot RTSP failed (rc={result.returncode}, #{fail_count}): {stderr}")
+            except Exception as e:
+                fail_count += 1
+                log.warning(f"Snapshot RTSP error #{fail_count}: {e}")
 
         now = time.time()
         if now - last_capture > 10 and _CLOUD_CAPTURE_FN:
@@ -299,6 +305,7 @@ def _snapshot_refresh_loop():
                     with _snapshot_lock:
                         _snapshot_cache = data
                     last_capture = now
+                    fail_count = 0
             except Exception:
                 pass
         time.sleep(5)
