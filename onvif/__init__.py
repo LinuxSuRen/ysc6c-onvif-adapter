@@ -31,10 +31,10 @@ PTZ_NODE_TOKEN = "ptz"
 PTZ_CONFIG_TOKEN = "ptzcfg"
 
 STREAM_URL: str | None = None
-SNAPSHOT_URL: str | None = None
 _snapshot_cache = b""
 _snapshot_lock = threading.Lock()
 PTZ_CONTROLLER = None
+_CLOUD_CAPTURE_FN = None
 
 
 def soap_response(body: str) -> bytes:
@@ -140,7 +140,7 @@ class ONVIFHandler(BaseHTTPRequestHandler):
             ),
             "GetStreamUri": lambda: soap_response(
                 f'<trt:GetStreamUriResponse><trt:MediaUri>'
-                f'<tt:Uri>rtsp://{HOST_IP}:{MJPEG_PORT}/yc6c_c6c</tt:Uri>'
+                f'<tt:Uri>http://{HOST_IP}:{MJPEG_PORT}/stream</tt:Uri>'
                 f'<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>'
                 f'<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>'
                 f'<tt:Timeout>PT0S</tt:Timeout></trt:MediaUri></trt:GetStreamUriResponse>'
@@ -273,20 +273,32 @@ def start_mjpeg_relay_inline(source_url: str, mjpeg_port: int = 8555) -> subproc
 def _snapshot_refresh_loop():
     global _snapshot_cache
     log.info("Snapshot cache refresh started")
+    last_capture = 0
     while True:
         source = STREAM_URL
-        if not source:
-            time.sleep(5)
-            continue
-        try:
-            args = ["ffmpeg", "-y"]
-            if source.startswith("rtsp://"):
-                args += ["-rtsp_transport", "tcp"]
-            args += ["-i", source, "-vframes", "1", "-f", "image2", "pipe:1"]
-            result = subprocess.run(args, capture_output=True, timeout=15)
-            if result.returncode == 0 and len(result.stdout) > 1000:
-                with _snapshot_lock:
-                    _snapshot_cache = result.stdout
-        except Exception:
-            pass
+        if source:
+            try:
+                args = ["ffmpeg", "-y"]
+                if source.startswith("rtsp://"):
+                    args += ["-rtsp_transport", "tcp"]
+                args += ["-i", source, "-vframes", "1", "-f", "image2", "pipe:1"]
+                result = subprocess.run(args, capture_output=True, timeout=15)
+                if result.returncode == 0 and len(result.stdout) > 1000:
+                    with _snapshot_lock:
+                        _snapshot_cache = result.stdout
+                    time.sleep(5)
+                    continue
+            except Exception:
+                pass
+
+        now = time.time()
+        if now - last_capture > 10 and _CLOUD_CAPTURE_FN:
+            try:
+                data = _CLOUD_CAPTURE_FN()
+                if data and len(data) > 1000:
+                    with _snapshot_lock:
+                        _snapshot_cache = data
+                    last_capture = now
+            except Exception:
+                pass
         time.sleep(5)

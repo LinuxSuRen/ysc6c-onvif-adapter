@@ -10,7 +10,7 @@ import threading
 
 from auth import YS7Auth, CameraInfo
 from ptz import PTZController
-from stream import get_rtsp_url, get_cloud_flv_url, get_cloud_hls_url, take_snapshot, stop_mjpeg_relay, download_capture
+from stream import get_rtsp_url, get_cloud_flv_url, get_cloud_hls_url, take_snapshot, stop_mjpeg_relay, download_capture, get_cloud_capture_url
 import onvif
 from onvif.discovery import run as discovery_run
 
@@ -142,8 +142,17 @@ class CameraConsole(cmd.Cmd):
     def do_onvif(self, _):
         rtsp = get_rtsp_url(self.rtsp_ip, self.rtsp_user, self.rtsp_pass)
         onvif.STREAM_URL = rtsp
-        onvif.SNAPSHOT_URL = rtsp
         onvif.PTZ_CONTROLLER = self.ptz
+
+        def _cloud_snapshot():
+            import requests
+            url = get_cloud_capture_url(self.auth, self.cam)
+            if not url:
+                return None
+            r = requests.get(url, timeout=10)
+            return r.content if r.status_code == 200 else None
+
+        onvif._CLOUD_CAPTURE_FN = _cloud_snapshot
 
         threading.Thread(target=self._start_onvif_server, daemon=True).start()
         print(f"🟢 ONVIF 已启动: http://{onvif.HOST_IP}:{onvif.ONVIF_PORT}/onvif/device_service")
@@ -201,8 +210,17 @@ def run_headless(auth: YS7Auth, cam: CameraInfo, config: dict):
     onvif.ONVIF_PORT = actual_port
     onvif.MJPEG_PORT = config["mjpeg_port"]
     onvif.STREAM_URL = stream_url
-    onvif.SNAPSHOT_URL = stream_url
     onvif.PTZ_CONTROLLER = ptz
+
+    def _cloud_snapshot():
+        import requests
+        url = get_cloud_capture_url(auth, cam)
+        if not url:
+            return None
+        r = requests.get(url, timeout=10)
+        return r.content if r.status_code == 200 else None
+
+    onvif._CLOUD_CAPTURE_FN = _cloud_snapshot
     onvif.DEVICE_UUID = str(onvif.uuid.uuid4())
     onvif.UUID_URN = f"urn:uuid:{onvif.DEVICE_UUID}"
 
