@@ -92,16 +92,20 @@ class CameraConsole(cmd.Cmd):
         print(f"🌐 RTSP:  {rtsp}")
         self._live_url = rtsp
 
-    def do_live_cloud(self, _):
-        flv = get_cloud_flv_url(self.auth, self.cam)
-        hls = get_cloud_hls_url(self.auth, self.cam)
+    def do_live_cloud(self, arg):
+        quality = 2 if arg.strip() == "sub" else 1
+        label = "高清" if quality == 1 else "流畅"
+        flv = get_cloud_flv_url(self.auth, self.cam, quality)
+        hls = get_cloud_hls_url(self.auth, self.cam, quality)
         if flv:
-            print(f"☁️  FLV: {flv}")
+            print(f"☁️  FLV ({label}): {flv}")
             self._live_url = flv
         if hls:
-            print(f"☁️  HLS: {hls}")
+            print(f"☁️  HLS ({label}): {hls}")
         if not flv and not hls:
             print("❌ 获取云端流失败")
+        print("   用法: live_cloud     → 高清主码流")
+        print("         live_cloud sub → 流畅子码流")
 
     def do_ffplay(self, _):
         url = self._live_url or get_rtsp_url(self.rtsp_ip, self.rtsp_user, self.rtsp_pass)

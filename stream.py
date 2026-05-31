@@ -9,6 +9,31 @@ def get_rtsp_url(ip: str, username: str, password: str) -> str:
     return f"rtsp://{username}:{password}@{ip}:554/h264/ch1/main/av_stream"
 
 
+def get_live_address(
+    auth: YS7Auth,
+    cam: CameraInfo,
+    protocol: int = 4,
+    quality: int = 1,
+    expire_seconds: int = 7200,
+) -> str | None:
+    import requests
+    r = requests.post(
+        "https://open.ys7.com/api/lapp/v2/live/address/get",
+        data={
+            "accessToken": auth.get_access_token(),
+            "deviceSerial": cam.serial,
+            "channelNo": str(cam.channel_no),
+            "protocol": str(protocol),
+            "quality": str(quality),
+            "expireTime": str(expire_seconds),
+        },
+    )
+    data = r.json()
+    if data.get("code") != "200":
+        return None
+    return data["data"].get("url")
+
+
 def get_cloud_live_url(auth: YS7Auth, cam: CameraInfo) -> dict | None:
     import requests
     r = requests.post(
@@ -33,20 +58,28 @@ def _first_source(data) -> dict | None:
     return None
 
 
-def get_cloud_flv_url(auth: YS7Auth, cam: CameraInfo) -> str | None:
+def get_cloud_flv_url(auth: YS7Auth, cam: CameraInfo, quality: int = 1) -> str | None:
+    url = get_live_address(auth, cam, protocol=4, quality=quality, expire_seconds=3600)
+    if url:
+        return url
     live = get_cloud_live_url(auth, cam)
     src = _first_source(live) if live else None
     if not src:
         return None
-    return src.get("flvAddress") or src.get("hdFlvAddress")
+    return (src.get("flvAddress") or src.get("hdFlvAddress")
+            if quality == 1 else src.get("flvAddress"))
 
 
-def get_cloud_hls_url(auth: YS7Auth, cam: CameraInfo) -> str | None:
+def get_cloud_hls_url(auth: YS7Auth, cam: CameraInfo, quality: int = 1) -> str | None:
+    url = get_live_address(auth, cam, protocol=2, quality=quality, expire_seconds=3600)
+    if url:
+        return url
     live = get_cloud_live_url(auth, cam)
     src = _first_source(live) if live else None
     if not src:
         return None
-    return src.get("liveAddress") or src.get("hdAddress")
+    return (src.get("liveAddress") or src.get("hdAddress")
+            if quality == 1 else src.get("liveAddress"))
 
 
 def start_mjpeg_relay(source_url: str, mjpeg_port: int = 8555) -> subprocess.Popen | None:
