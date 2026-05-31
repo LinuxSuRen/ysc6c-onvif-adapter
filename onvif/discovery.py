@@ -60,6 +60,13 @@ HELLO = """<?xml version="1.0" encoding="utf-8"?>
 def _make_multicast_sender():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 4)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
+    finally:
+        s.close()
     return sock
 
 
@@ -72,10 +79,7 @@ def broadcast_hello(dev_uuid: str, scopes: list[str], host_ip: str, onvif_port: 
             mid=uuid.uuid4(), seq=seq, dev_uuid=dev_uuid,
             scopes=" ".join(scopes), host=host_ip, port=onvif_port,
         )
-        try:
-            sock.sendto(msg.encode(), (MCAST, PORT))
-        except OSError:
-            pass
+        sock.sendto(msg.encode(), (MCAST, PORT))
         seq += 1
         time.sleep(30)
 
