@@ -86,8 +86,8 @@ def start_mjpeg_relay(source_url: str, mjpeg_port: int = 8555) -> subprocess.Pop
     args = ["ffmpeg", "-re"]
     if source_url.startswith("rtsp://"):
         args += ["-rtsp_transport", "tcp"]
-    args += ["-i", source_url, "-c:v", "mjpeg", "-q:v", "5",
-             "-f", "mpjpeg", f"http://0.0.0.0:{mjpeg_port}/stream"]
+    args += ["-i", source_url, "-c:v", "copy", "-an",
+             "-f", "mpegts", f"http://0.0.0.0:{mjpeg_port}/stream"]
     try:
         return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
@@ -101,12 +101,17 @@ def stop_mjpeg_relay(proc: subprocess.Popen | None):
 
 
 def take_snapshot(source_url: str, output_path: str = "/tmp/c6c_snap.jpg") -> str | None:
-    args = ["ffmpeg", "-y"]
+    args = [
+        "ffmpeg", "-y",
+        "-fflags", "nobuffer",
+        "-analyzeduration", "100000",
+        "-probesize", "50000",
+    ]
     if source_url.startswith("rtsp://"):
         args += ["-rtsp_transport", "tcp"]
     args += ["-i", source_url, "-vframes", "1", "-f", "image2", output_path]
     try:
-        subprocess.run(args, capture_output=True, timeout=10)
+        subprocess.run(args, capture_output=True, timeout=8)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
     return output_path if os.path.exists(output_path) else None

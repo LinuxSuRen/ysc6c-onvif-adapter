@@ -35,6 +35,8 @@ _snapshot_cache = b""
 _snapshot_lock = threading.Lock()
 PTZ_CONTROLLER = None
 _CLOUD_CAPTURE_FN = None
+_SNAPSHOT_LIVE_PATH = "/tmp/snapshot_live.jpg"
+_snapshot_ffmpeg_proc: subprocess.Popen | None = None
 
 
 def soap_response(body: str) -> bytes:
@@ -68,15 +70,25 @@ class ONVIFHandler(BaseHTTPRequestHandler):
         self.wfile.write(resp)
 
     def do_GET(self):
-        if self.path == "/snapshot.jpg" and _snapshot_cache:
-            with _snapshot_lock:
-                data = _snapshot_cache
-            self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
-            self.send_header("Content-Length", len(data))
-            self.end_headers()
-            self.wfile.write(data)
-            return
+        if self.path == "/snapshot.jpg":
+            data = None
+            try:
+                with open(_SNAPSHOT_LIVE_PATH, "rb") as f:
+                    live = f.read()
+                if live[:2] == b"\xff\xd8" and len(live) > 1000:
+                    data = live
+            except (FileNotFoundError, OSError):
+                pass
+            if not data:
+                with _snapshot_lock:
+                    data = _snapshot_cache
+            if data:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", len(data))
+                self.end_headers()
+                self.wfile.write(data)
+                return
         self.send_response(200)
         self.send_header("Content-Type", "text/xml")
         self.end_headers()
@@ -149,6 +161,49 @@ class ONVIFHandler(BaseHTTPRequestHandler):
                 f'<trt:GetSnapshotUriResponse><trt:MediaUri>'
                 f'<tt:Uri>http://{HOST_IP}:{ONVIF_PORT}/snapshot.jpg</tt:Uri>'
                 f'</trt:MediaUri></trt:GetSnapshotUriResponse>'
+            ),
+            "GetVideoEncoderConfiguration": lambda: soap_response(
+                f'<trt:GetVideoEncoderConfigurationResponse>'
+                f'<trt:Configuration token="{VIDEO_ENC_TOKEN}">'
+                f"<tt:Name>H264</tt:Name>"
+                f"<tt:Encoding>H264</tt:Encoding>"
+                f"<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>"
+                f"<tt:Quality>10</tt:Quality>"
+                f"<tt:RateControl><tt:FrameRateLimit>30</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval>"
+                f"<tt:BitrateLimit>4096</tt:BitrateLimit></tt:RateControl>"
+                f"<tt:H264><tt:GovLength>30</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264>"
+                f"<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type></tt:Address></tt:Multicast>"
+                f"<tt:SessionTimeout>PT5S</tt:SessionTimeout>"
+                f"</trt:Configuration></trt:GetVideoEncoderConfigurationResponse>"
+            ),
+            "GetVideoEncoderConfigurations": lambda: soap_response(
+                f'<trt:GetVideoEncoderConfigurationsResponse>'
+                f'<trt:Configurations token="{VIDEO_ENC_TOKEN}">'
+                f"<tt:Name>H264</tt:Name>"
+                f"<tt:Encoding>H264</tt:Encoding>"
+                f"<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>"
+                f"<tt:Quality>10</tt:Quality>"
+                f"<tt:RateControl><tt:FrameRateLimit>30</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval>"
+                f"<tt:BitrateLimit>4096</tt:BitrateLimit></tt:RateControl>"
+                f"<tt:H264><tt:GovLength>30</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264>"
+                f"</trt:Configurations></trt:GetVideoEncoderConfigurationsResponse>"
+            ),
+            "GetVideoEncoderConfigurationOptions": lambda: soap_response(
+                f'<trt:GetVideoEncoderConfigurationOptionsResponse>'
+                f'<trt:Options>'
+                f'<tt:QualityRange><tt:Min>1</tt:Min><tt:Max>10</tt:Max></tt:QualityRange>'
+                f'<tt:ResolutionsAvailable><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:ResolutionsAvailable>'
+                f'<tt:ResolutionsAvailable><tt:Width>1280</tt:Width><tt:Height>720</tt:Height></tt:ResolutionsAvailable>'
+                f'<tt:H264Options>'
+                f'<tt:ResolutionsAvailable><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:ResolutionsAvailable>'
+                f'<tt:ResolutionsAvailable><tt:Width>1280</tt:Width><tt:Height>720</tt:Height></tt:ResolutionsAvailable>'
+                f'<tt:GovLengthRange><tt:Min>1</tt:Min><tt:Max>120</tt:Max></tt:GovLengthRange>'
+                f'<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>30</tt:Max></tt:FrameRateRange>'
+                f'<tt:EncodingProfiles>High</tt:EncodingProfiles>'
+                f'<tt:EncodingProfiles>Main</tt:EncodingProfiles>'
+                f'<tt:EncodingProfiles>Baseline</tt:EncodingProfiles>'
+                f'</tt:H264Options>'
+                f'</trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>'
             ),
 
             "GetNodes": lambda: soap_response(
@@ -263,15 +318,57 @@ def start_onvif_server(host: str = "0.0.0.0", port: int = 8089) -> int:
     return port
 
 
+def _stop_snapshot_ffmpeg():
+    global _snapshot_ffmpeg_proc
+    if _snapshot_ffmpeg_proc:
+        _snapshot_ffmpeg_proc.terminate()
+        try:
+            _snapshot_ffmpeg_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _snapshot_ffmpeg_proc.kill()
+        _snapshot_ffmpeg_proc = None
+
+
+def _start_snapshot_ffmpeg(source_url: str) -> subprocess.Popen | None:
+    _stop_snapshot_ffmpeg()
+    args = [
+        "ffmpeg", "-y",
+        "-fflags", "nobuffer",
+        "-analyzeduration", "100000",
+        "-probesize", "50000",
+        "-loglevel", "error",
+        "-nostdin",
+    ]
+    if source_url.startswith("rtsp://"):
+        args += ["-rtsp_transport", "tcp"]
+    args += [
+        "-i", source_url,
+        "-vf", "fps=5",
+        "-f", "image2",
+        "-update", "1",
+        _SNAPSHOT_LIVE_PATH,
+    ]
+    try:
+        global _snapshot_ffmpeg_proc
+        _snapshot_ffmpeg_proc = subprocess.Popen(
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        log.info(f"Snapshot ffmpeg started → {_SNAPSHOT_LIVE_PATH}")
+        return _snapshot_ffmpeg_proc
+    except FileNotFoundError:
+        log.error("ffmpeg not found for snapshot")
+        return None
+
+
 def start_mjpeg_relay_inline(source_url: str, mjpeg_port: int = 8555) -> subprocess.Popen | None:
     args = ["ffmpeg", "-re"]
     if source_url.startswith("rtsp://"):
         args += ["-rtsp_transport", "tcp"]
-    args += ["-i", source_url, "-c:v", "mjpeg", "-q:v", "5",
-             "-f", "mpjpeg", f"http://0.0.0.0:{mjpeg_port}/stream"]
+    args += ["-i", source_url, "-c:v", "copy", "-an",
+             "-f", "mpegts", f"http://0.0.0.0:{mjpeg_port}/stream"]
     try:
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        log.info(f"MJPEG http://{HOST_IP}:{mjpeg_port}/stream")
+        log.info(f"H.264 passthrough http://{HOST_IP}:{mjpeg_port}/stream")
         threading.Thread(target=_snapshot_refresh_loop, daemon=True).start()
         return proc
     except FileNotFoundError:
@@ -280,34 +377,51 @@ def start_mjpeg_relay_inline(source_url: str, mjpeg_port: int = 8555) -> subproc
 
 
 def _snapshot_refresh_loop():
-    global _snapshot_cache
+    global _snapshot_cache, _snapshot_ffmpeg_proc
     log.info("Snapshot cache refresh started")
     last_capture = 0
     fail_count = 0
+    last_url = None
+    ffmpeg_started_at = 0
+
     while True:
         source = STREAM_URL
         if source:
-            try:
-                args = ["ffmpeg", "-y"]
-                if source.startswith("rtsp://"):
-                    args += ["-rtsp_transport", "tcp"]
-                args += ["-i", source, "-vframes", "1", "-f", "image2", "pipe:1"]
-                result = subprocess.run(args, capture_output=True, timeout=15)
-                if result.returncode == 0 and len(result.stdout) > 1000:
-                    with _snapshot_lock:
-                        _snapshot_cache = result.stdout
-                    fail_count = 0
-                    time.sleep(5)
+            if (source != last_url
+                    or _snapshot_ffmpeg_proc is None
+                    or _snapshot_ffmpeg_proc.poll() is not None):
+                last_url = source
+                proc = _start_snapshot_ffmpeg(source)
+                if proc is not None:
+                    ffmpeg_started_at = time.time()
+                    time.sleep(0.5)
                     continue
                 fail_count += 1
-                stderr = result.stderr.decode(errors="ignore")[-200:] if result.stderr else "no output"
-                log.warning(f"Snapshot RTSP failed (rc={result.returncode}, #{fail_count}): {stderr}")
-            except Exception as e:
+
+            if time.time() - ffmpeg_started_at > 0.5:
+                try:
+                    with open(_SNAPSHOT_LIVE_PATH, "rb") as f:
+                        data = f.read()
+                    if data[:2] == b"\xff\xd8" and len(data) > 1000:
+                        with _snapshot_lock:
+                            _snapshot_cache = data
+                        fail_count = 0
+                        time.sleep(0.1)
+                        continue
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    pass
+
+            if _snapshot_ffmpeg_proc and _snapshot_ffmpeg_proc.poll() is not None:
+                log.warning("Snapshot ffmpeg exited, restarting...")
+                _snapshot_ffmpeg_proc = None
                 fail_count += 1
-                log.warning(f"Snapshot RTSP error #{fail_count}: {e}")
+        else:
+            fail_count += 1
 
         now = time.time()
-        if now - last_capture > 10 and _CLOUD_CAPTURE_FN:
+        if now - last_capture > 5 and _CLOUD_CAPTURE_FN:
             try:
                 data = _CLOUD_CAPTURE_FN()
                 if data and len(data) > 1000:
@@ -317,4 +431,4 @@ def _snapshot_refresh_loop():
                     fail_count = 0
             except Exception:
                 pass
-        time.sleep(5)
+        time.sleep(0.5)
